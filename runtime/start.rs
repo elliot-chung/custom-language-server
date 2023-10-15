@@ -82,7 +82,6 @@ pub unsafe extern "C" fn snek_try_gc(
         eprintln!("out of memory");
         std::process::exit(ErrCode::OutOfMemory as i32)
     } else {
-        println!("GC");
         ptr as u64
     }  
 }

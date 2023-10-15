@@ -3,12 +3,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
+	"time"
 )
 
 var id = 0
@@ -60,12 +64,16 @@ func handler2(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var createError = func(msg string) {
+		res.Output = msg
+		json.NewEncoder(w).Encode(res)
+		del()
+	}
+
 	// Create a directory for the user
 	err := os.Mkdir(fmt.Sprintf("tests/tmp%d", id), 0777)
 	if err != nil {
-		res.Output = fmt.Sprintf("Error creating directory: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error creating directory: %s", err))
 		return
 	}
 
@@ -73,18 +81,14 @@ func handler2(w http.ResponseWriter, r *http.Request) {
 	var req CompilationRequest
 	err = json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
-		res.Output = fmt.Sprintf("Error parsing request body: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error parsing request body: %s", err))
 		return
 	}
 
 	// Create a file with the request body
 	f, err := os.Create(fmt.Sprintf("tests/tmp%d/code.snek", id))
 	if err != nil {
-		res.Output = fmt.Sprintf("Error creating file: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error creating file: %s", err))
 		return
 	}
 	defer f.Close()
@@ -92,37 +96,80 @@ func handler2(w http.ResponseWriter, r *http.Request) {
 	// Write the code to the file
 	_, err = f.Write([]byte(req.Code))
 	if err != nil {
-		res.Output = fmt.Sprintf("Error writing to file: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error writing to file: %s", err))
 		return
 	}
 
 	// Compile the file
-	_, err = exec.Command("make", fmt.Sprintf("tests/tmp%d/code.run", id)).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "make", fmt.Sprintf("tests/tmp%d/code.run", id))
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		res.Output = fmt.Sprintf("Error compiling file: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error creating stderr pipe: %s", err))
+		return
+	}
+
+	cmd.Start()
+	slurp, _ := io.ReadAll(stderr)
+
+	err = cmd.Wait()
+	if err != nil {
+		// If ctx was canceled, then the command timed out
+		if ctx.Err() == context.DeadlineExceeded {
+			createError("Error: Timed out during compilation")
+			return
+		}
+		createError(fmt.Sprintf("Error compiling file: %s", slurp))
 		return
 	}
 
 	// Run the file
 	inp := "false"
 	if req.Input != "" {
-		inp = req.Input
+		// Sanitize the input by removing all whitespace character (including newlines)
+		var b strings.Builder
+		for _, c := range req.Input {
+			if !strings.ContainsRune(" \t\n\r", c) {
+				b.WriteRune(c)
+			}
+		}
+		inp = b.String()
 	}
-	out, err := exec.Command(fmt.Sprintf("./tests/tmp%d/code.run", id), inp, strconv.FormatInt(req.Memory, 10)).Output()
+	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmd = exec.CommandContext(ctx, fmt.Sprintf("./tests/tmp%d/code.run", id), inp, strconv.FormatInt(req.Memory, 10))
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		res.Output = fmt.Sprintf("Error running file: %s", err)
-		json.NewEncoder(w).Encode(res)
-		del()
+		createError(fmt.Sprintf("Server Error creating stdout pipe: %s", err))
+		return
+	}
+	stderr, err = cmd.StderrPipe()
+	if err != nil {
+		createError(fmt.Sprintf("Server Error creating stderr pipe: %s", err))
+		return
+	}
+
+	cmd.Start()
+	slurperr, _ := io.ReadAll(stderr)
+	slurpout, _ := io.ReadAll(stdout)
+
+	err = cmd.Wait()
+	if err != nil {
+		// If ctx was canceled, then the command timed out
+		if ctx.Err() == context.DeadlineExceeded {
+			createError("Error: Timed out during execution")
+			return
+		}
+		createError(fmt.Sprintf("Error running file: %s", slurperr))
 		return
 	}
 
 	// Return the output
 	res.Success = true
-	res.Output = string(out)
+	res.Output = string(slurpout)
 	json.NewEncoder(w).Encode(res)
 
 	// Delete the directory
