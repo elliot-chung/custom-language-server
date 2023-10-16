@@ -19,7 +19,6 @@ var id = 0
 
 func main() {
 	http.HandleFunc("/", handler)
-	http.HandleFunc("/compile", handler2)
 	http.ListenAndServe(":8080", nil)
 }
 
@@ -31,12 +30,6 @@ func enableCors(w *http.ResponseWriter) {
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
-	enableCors(&w)
-
-	w.Write([]byte("Hello World!"))
-}
-
-func handler2(w http.ResponseWriter, r *http.Request) {
 	enableCors(&w)
 
 	w.Header().Set("Content-Type", "application/json")

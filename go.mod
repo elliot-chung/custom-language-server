@@ -1,4 +1,3 @@
-module server.exe
+module server
 
 go 1.19
-
