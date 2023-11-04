@@ -1,4 +1,4 @@
-# Compiler Server - [Link to Interactive Client](https://github.com/ec-2018/custom-language-server)
+# Compiler Server - [Link to Interactive Client](https://github.com/ec-2018/custom-language-client)
 
 ## Overview
 
